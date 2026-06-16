@@ -250,10 +250,123 @@ export function applyMapping(rows, mapping, hasHeader = true) {
 
 /**
  * Tenta um parsing totalmente automático para documentos simples
- * (uma coluna por linha, ou patrimônio + descrição)
  */
+function parseLineType(line) {
+  const clean = line.trim();
+  if (!clean) return { type: 'empty' };
+
+  // Check if first word is numeric (patrimony number)
+  const firstWord = clean.split(/\s+/)[0];
+  const isPatrimonyNumber = /^\d+$/.test(firstWord) || /^[A-Za-z]+[-_]?\d+$/.test(firstWord);
+
+  if (isPatrimonyNumber) {
+    // Check if it has notes after a separator (e.g. "039930 - gabinete")
+    const match = clean.match(/^([A-Za-z0-9-_]+)\s*[-–—:]\s*(.+)$/);
+    if (match) {
+      return {
+        type: 'item',
+        patrimony: match[1].toUpperCase(),
+        note: match[2].trim()
+      };
+    } else {
+      return {
+        type: 'item',
+        patrimony: clean.toUpperCase(),
+        note: ''
+      };
+    }
+  }
+
+  // Check if it is a total line or header with calculation
+  const hasDelimiter = clean.includes('=') || clean.includes(':');
+  if (hasDelimiter) {
+    const sep = clean.includes('=') ? '=' : ':';
+    let beforeText = clean.substring(0, clean.indexOf(sep)).trim();
+    let afterText = clean.substring(clean.indexOf(sep) + 1).replace(/\|/g, '').trim();
+
+    // If there are multiple '=' or it has calculations (e.g. "funcionando = 12+9... = 178")
+    if (clean.split('=').length > 2) {
+      const idx = clean.lastIndexOf('=');
+      beforeText = clean.substring(0, idx).trim();
+      afterText = clean.substring(idx + 1).replace(/\|/g, '').trim();
+    }
+
+    if (/^\d+$/.test(afterText)) {
+      const total = parseInt(afterText, 10);
+
+      // Check if it is a summary total line for the previous block
+      if (/^total/i.test(beforeText)) {
+        return {
+          type: 'summary_total',
+          total: total
+        };
+      }
+
+      // It is a header with count total
+      let name = beforeText;
+      let expression = '';
+      if (beforeText.includes('=')) {
+        const parts2 = beforeText.split('=');
+        name = parts2[0].trim();
+        expression = parts2[1].trim();
+      }
+
+      return {
+        type: 'header_with_qty',
+        name: name,
+        expression: expression,
+        total: total
+      };
+    }
+  }
+
+  // General text line (like "Monitor", "Notebook")
+  return {
+    type: 'header_plain',
+    name: clean
+  };
+}
+
+function generateVirtualPatrimony(name) {
+  return name
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '');
+}
+
+function detectStateFromName(name) {
+  const lower = name.toLowerCase();
+  if (lower.includes('descarte') || lower.includes('ruim') || lower.includes('quebrado') || lower.includes('danificado') || lower.includes('manutencao') || lower.includes('manutenção')) {
+    return 'Ruim';
+  }
+  if (lower.includes('excelente') || lower.includes('otimo') || lower.includes('ótimo') || lower.includes('novo')) {
+    return 'Excelente';
+  }
+  return 'Bom';
+}
+
+function normalizeCategory(categoryName) {
+  const lowerCat = categoryName.toLowerCase();
+  if (lowerCat.includes('computador') || lowerCat.includes('notebook') || lowerCat.includes('pc') || lowerCat.includes('laptop')) {
+    return 'Computador';
+  } else if (lowerCat.includes('monitor') || lowerCat.includes('tela') || lowerCat.includes('display')) {
+    return 'Monitor';
+  } else if (lowerCat.includes('impressora') || lowerCat.includes('multifuncional')) {
+    return 'Impressora';
+  } else if (lowerCat.includes('teclado') || lowerCat.includes('mouse') || lowerCat.includes('combo')) {
+    return 'Teclado/Mouse';
+  } else if (lowerCat.includes('rede') || lowerCat.includes('switch') || lowerCat.includes('roteador')) {
+    return 'Rede';
+  } else if (lowerCat.includes('moveis') || lowerCat.includes('móveis') || lowerCat.includes('cadeira') || lowerCat.includes('mesa') || lowerCat.includes('armario') || lowerCat.includes('armário')) {
+    return 'Móveis';
+  } else {
+    return categoryName.charAt(0).toUpperCase() + categoryName.slice(1);
+  }
+}
+
 export function autoParseSimple(rows) {
-  // Se cada linha tem apenas 1 ou 2 colunas
   const isSingleColumn = rows.every(r => r.length <= 2);
 
   if (!isSingleColumn) return null;
@@ -261,77 +374,96 @@ export function autoParseSimple(rows) {
   // Flatten rows to array of strings, filtering out completely empty rows
   const lines = rows.map(r => String(r[0] || '').trim()).filter(Boolean);
 
-  // Check if it is a grouped list (contains "total" line, case-insensitive)
-  const isGrouped = lines.some(line => /total/i.test(line));
+  // Fallback to simple flat list if it has multiple filled columns or only numeric lines
+  const hasMultipleColumns = rows.some(r => r[1] && String(r[1]).trim() !== '');
+  const hasTextLines = lines.some(line => {
+    const clean = line.trim();
+    const isNum = /^\d+$/.test(clean) || /^[A-Za-z]+[-_]?\d+$/.test(clean);
+    return !isNum;
+  });
 
-  if (isGrouped) {
-    const items = [];
-    let currentCategory = 'Outros';
-
-    for (const line of lines) {
-      const clean = line.trim();
-      if (!clean) continue;
-
-      // Check if it's a total line
-      if (/total/i.test(clean)) {
-        continue; // Skip total line
-      }
-
-      // Check if it is a patrimony number
-      const isNum = /^\d+$/.test(clean) || /^[A-Za-z]+[-_]?\d+$/.test(clean);
-
-      if (isNum) {
-        const patrimony = clean.toUpperCase();
-        
-        // Normalize the category to match system categories if possible
-        let matchedCategory = 'Outros';
-        const lowerCat = currentCategory.toLowerCase();
-        
-        if (lowerCat.includes('computador') || lowerCat.includes('notebook') || lowerCat.includes('pc') || lowerCat.includes('laptop')) {
-          matchedCategory = 'Computador';
-        } else if (lowerCat.includes('monitor') || lowerCat.includes('tela') || lowerCat.includes('display')) {
-          matchedCategory = 'Monitor';
-        } else if (lowerCat.includes('impressora') || lowerCat.includes('multifuncional')) {
-          matchedCategory = 'Impressora';
-        } else if (lowerCat.includes('teclado') || lowerCat.includes('mouse')) {
-          matchedCategory = 'Teclado/Mouse';
-        } else if (lowerCat.includes('rede') || lowerCat.includes('switch') || lowerCat.includes('roteador')) {
-          matchedCategory = 'Rede';
-        } else if (lowerCat.includes('moveis') || lowerCat.includes('móveis') || lowerCat.includes('cadeira') || lowerCat.includes('mesa')) {
-          matchedCategory = 'Móveis';
-        } else {
-          matchedCategory = currentCategory.charAt(0).toUpperCase() + currentCategory.slice(1);
-        }
-
-        items.push({
-          patrimony,
-          category: matchedCategory,
-          description: `${currentCategory} nº ${patrimony}`,
+  if (hasMultipleColumns || !hasTextLines) {
+    return rows
+      .filter(r => r[0] && String(r[0]).trim())
+      .map(r => {
+        const val = String(r[0]).trim().toUpperCase();
+        const desc = r[1] ? String(r[1]).trim() : '';
+        return {
+          patrimony: val,
+          category: detectCategory(desc || val),
+          description: desc || val,
           state: 'Bom',
           location: 'Depósito',
           notes: '',
-        });
-      } else {
-        // It's a new category header!
-        currentCategory = clean;
-      }
-    }
-    return items;
+        };
+      });
   }
 
-  // Fallback to simple flat list parsing
-  return rows
-    .filter(r => r[0] && String(r[0]).trim())
-    .map(r => {
-      const val = String(r[0]).trim().toUpperCase();
-      const desc = r[1] ? String(r[1]).trim() : '';
-      return {
-        patrimony: val,
-        category: detectCategory(desc || val),
-        description: desc || val,
+  // Grouped stream parser with lookahead
+  const parsedLines = lines.map(line => parseLineType(line)).filter(l => l.type !== 'empty');
+  const items = [];
+  let currentCategory = 'Outros';
+
+  for (let i = 0; i < parsedLines.length; i++) {
+    const current = parsedLines[i];
+
+    if (current.type === 'summary_total') {
+      continue; // Skip group sum totals
+    }
+
+    if (current.type === 'item') {
+      const category = normalizeCategory(currentCategory);
+      items.push({
+        patrimony: current.patrimony,
+        category: category,
+        description: current.note ? `${currentCategory} (${current.note})` : `${currentCategory} nº ${current.patrimony}`,
         state: 'Bom',
         location: 'Depósito',
-        notes: '',
-      };
-    });
+        notes: current.note ? `Observação original: ${current.note}` : '',
+      });
+      continue;
+    }
+
+    if (current.type === 'header_plain') {
+      currentCategory = current.name;
+      continue;
+    }
+
+    if (current.type === 'header_with_qty') {
+      // Lookahead to see if there are any item codes listed below this header
+      let hasItemsUnderneath = false;
+      for (let j = i + 1; j < parsedLines.length; j++) {
+        const next = parsedLines[j];
+        if (next.type === 'header_plain' || next.type === 'header_with_qty') {
+          break; // Stop at next header
+        }
+        if (next.type === 'item') {
+          hasItemsUnderneath = true;
+          break;
+        }
+      }
+
+      if (hasItemsUnderneath) {
+        currentCategory = current.name;
+      } else {
+        // Virtual batch item
+        const descName = current.name;
+        const matchedCategory = normalizeCategory(descName);
+        const patrimony = generateVirtualPatrimony(descName);
+        
+        items.push({
+          patrimony,
+          category: matchedCategory,
+          description: `${descName} (Lote de ${current.total} itens)`,
+          state: detectStateFromName(descName),
+          location: 'Depósito',
+          notes: current.expression ? `Detalhamento: ${current.expression} = ${current.total} itens.` : `Lote com ${current.total} itens.`,
+          isVirtual: true,
+          quantity: current.total
+        });
+      }
+    }
+  }
+
+  return items.length > 0 ? items : null;
 }

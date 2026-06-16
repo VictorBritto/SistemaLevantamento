@@ -105,10 +105,10 @@ export function useInventory() {
   }, []);
 
   const metrics = {
-    total: items.length,
-    computers: items.filter(i => i.category === 'Computador').length,
-    monitors: items.filter(i => i.category === 'Monitor').length,
-    damaged: items.filter(i => i.state === 'Ruim').length,
+    total: items.reduce((acc, i) => acc + (i.isVirtual ? i.quantity : 1), 0),
+    computers: items.filter(i => i.category === 'Computador').reduce((acc, i) => acc + (i.isVirtual ? i.quantity : 1), 0),
+    monitors: items.filter(i => i.category === 'Monitor').reduce((acc, i) => acc + (i.isVirtual ? i.quantity : 1), 0),
+    damaged: items.filter(i => i.state === 'Ruim').reduce((acc, i) => acc + (i.isVirtual ? i.quantity : 1), 0),
   };
 
   return {

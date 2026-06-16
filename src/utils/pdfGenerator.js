@@ -1,7 +1,7 @@
 import jsPDF from 'jspdf';
-import 'jspdf-autotable';
+import autoTable from 'jspdf-autotable';
 
-export function generatePdfReport(items, config) {
+export async function generatePdfReport(items, config) {
   const doc = new jsPDF('p', 'mm', 'a4');
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
@@ -11,126 +11,187 @@ export function generatePdfReport(items, config) {
     title: config.title,
     subject: 'Inventário de Patrimônios',
     author: config.author,
-    creator: 'InvKeep System',
+    creator: 'FHO-Levantamento',
   });
 
   const accentColor = [6, 182, 212];
-  const primaryColor = [21, 34, 56];
+  const primaryColor = [21, 34, 56]; // FHO Dark Blue
   const darkGray = [80, 80, 80];
 
+  // Load FHO Logo
+  let logoDataUrl = null;
+  try {
+    const response = await fetch('/fho-logo.png');
+    if (response.ok) {
+      const blob = await response.blob();
+      logoDataUrl = await new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.readAsDataURL(blob);
+      });
+    }
+  } catch (err) {
+    console.warn('Não foi possível carregar a logo para o PDF', err);
+  }
+
   const drawHeader = () => {
+    // Top accent line
     doc.setFillColor(...accentColor);
-    doc.rect(0, 0, pageWidth, 4, 'F');
+    doc.rect(0, 0, pageWidth, 2, 'F');
+
+    // Dark blue banner background
+    doc.setFillColor(...primaryColor);
+    doc.rect(0, 2, pageWidth, 24, 'F');
+
+    let textStartX = margin;
+    
+    if (logoDataUrl) {
+      doc.addImage(logoDataUrl, 'PNG', margin, 7, 35, 14);
+      textStartX = margin + 40;
+    }
 
     doc.setFont('Helvetica', 'bold');
     doc.setFontSize(16);
-    doc.setTextColor(...primaryColor);
-    doc.text('INVKEEP', margin, 15);
+    doc.setTextColor(255, 255, 255);
+    doc.text('FHO-LEVANTAMENTO', textStartX, 13);
 
     doc.setFont('Helvetica', 'normal');
     doc.setFontSize(8);
-    doc.setTextColor(...darkGray);
-    doc.text('SISTEMA DE CONTROLE DE PATRIMÔNIO', margin, 19);
+    doc.setTextColor(200, 200, 200);
+    doc.text('SISTEMA DE CONTROLE DE PATRIMÔNIO', textStartX, 18);
 
     const dateStr = new Date().toLocaleDateString('pt-BR');
     const timeStr = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
     doc.setFontSize(9);
-    doc.text(`Gerado em: ${dateStr} às ${timeStr}`, pageWidth - margin, 15, { align: 'right' });
-
-    doc.setDrawColor(220, 220, 220);
-    doc.setLineWidth(0.5);
-    doc.line(margin, 22, pageWidth - margin, 22);
+    doc.setTextColor(255, 255, 255);
+    doc.text(`Gerado em: ${dateStr} às ${timeStr}`, pageWidth - margin, 13, { align: 'right' });
 
     doc.setFont('Helvetica', 'bold');
     doc.setFontSize(13);
     doc.setTextColor(...primaryColor);
-    doc.text(config.title.toUpperCase(), margin, 30);
+    doc.text(config.title.toUpperCase(), margin, 34);
 
     doc.setFont('Helvetica', 'normal');
     doc.setFontSize(9);
     doc.setTextColor(...darkGray);
-    doc.text(`Setor/Departamento: ${config.department || 'Geral'}`, margin, 36);
-    doc.text(`Responsável pelo Inventário: ${config.author}`, margin, 41);
+    doc.text(`Setor/Departamento: ${config.department || 'Geral'}`, margin, 40);
+    doc.text(`Responsável pelo Inventário: ${config.author}`, margin, 45);
 
-    doc.line(margin, 45, pageWidth - margin, 45);
+    doc.setDrawColor(220, 220, 220);
+    doc.setLineWidth(0.5);
+    doc.line(margin, 49, pageWidth - margin, 49);
   };
 
-  const totalItems = items.length;
-  const countComputers = items.filter(i => i.category === 'Computador').length;
-  const countMonitors = items.filter(i => i.category === 'Monitor').length;
+  const drawnPages = new Set();
+  const drawPageAssets = () => {
+    const currentPage = doc.internal.getNumberOfPages();
+    if (drawnPages.has(currentPage)) return;
+    drawnPages.add(currentPage);
+    
+    drawHeader();
+    doc.setFont('Helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(...darkGray);
+    doc.text(`Página ${currentPage} de {total}`, pageWidth / 2, pageHeight - 10, { align: 'center' });
+    doc.text('FHO-Levantamento | Gerenciamento de Inventários Integrado', margin, pageHeight - 10);
+  };
 
-  const tableColumns = [
-    { header: 'Patrimônio', dataKey: 'patrimony' },
-    { header: 'Categoria', dataKey: 'category' },
-    { header: 'Descrição / Modelo', dataKey: 'description' },
-    { header: 'Estado', dataKey: 'state' },
-    { header: 'Localização', dataKey: 'location' },
-  ];
-
-  const tableRows = items.map(item => {
-    let desc = item.description;
-    if (config.includeNotes && item.notes) {
-      desc += `\nObservações: ${item.notes}`;
-    }
-    return {
-      patrimony: item.patrimony,
-      category: item.category,
-      description: desc,
-      state: item.state,
-      location: item.location,
-    };
-  });
-
-  doc.autoTable({
-    columns: tableColumns,
-    body: tableRows,
-    startY: 48,
-    margin: { top: 48, bottom: 45, left: margin, right: margin },
-    styles: {
-      font: 'Helvetica',
-      fontSize: 9,
-      cellPadding: 3,
-      overflow: 'linebreak',
-      valign: 'middle',
-    },
-    headStyles: {
-      fillColor: [30, 41, 59],
-      textColor: 255,
-      fontStyle: 'bold',
-      fontSize: 9,
-      halign: 'left',
-    },
-    alternateRowStyles: {
-      fillColor: [248, 250, 252],
-    },
-    columnStyles: {
-      patrimony: { cellWidth: 28, fontStyle: 'bold' },
-      category: { cellWidth: 25 },
-      description: { cellWidth: 'auto' },
-      state: { cellWidth: 20 },
-      location: { cellWidth: 32 },
-    },
-    didDrawPage: (data) => {
-      drawHeader();
-      const currentPage = data.pageNumber;
-      doc.setFont('Helvetica', 'normal');
-      doc.setFontSize(8);
-      doc.setTextColor(...darkGray);
-      doc.text(`Página ${currentPage} de [total]`, pageWidth / 2, pageHeight - 10, { align: 'center' });
-      doc.text('InvKeep | Gerenciamento de Inventários Integrado', margin, pageHeight - 10);
-    },
-  });
-
-  if (typeof doc.putTotalPages === 'function') {
-    doc.putTotalPages('[total]');
+  // If no items, draw first page header
+  if (items.length === 0) {
+    drawPageAssets();
   }
 
-  const lastY = doc.lastAutoTable.finalY || 50;
+  const totalItems = items.reduce((acc, i) => acc + (i.isVirtual ? i.quantity : 1), 0);
+  const countComputers = items.filter(i => i.category === 'Computador').reduce((acc, i) => acc + (i.isVirtual ? i.quantity : 1), 0);
+  const countMonitors = items.filter(i => i.category === 'Monitor').reduce((acc, i) => acc + (i.isVirtual ? i.quantity : 1), 0);
+
+  const categories = [...new Set(items.map(i => i.category))].sort();
+
+  let startY = 54;
+  // If we haven't drawn the header yet, draw it (since we need it on first page before first table starts)
+  drawPageAssets();
+
+  for (const cat of categories) {
+    const catItems = items.filter(i => i.category === cat);
+    if (catItems.length === 0) continue;
+
+    const tableColumns = [
+      { header: 'Patrimônio', dataKey: 'patrimony' },
+      { header: 'Descrição / Modelo', dataKey: 'description' },
+      { header: 'Estado', dataKey: 'state' },
+      { header: 'Localização', dataKey: 'location' },
+    ];
+
+    const tableRows = catItems.map(item => {
+      let desc = item.description;
+      if (config.includeNotes && item.notes) {
+        desc += `\nObservações: ${item.notes}`;
+      }
+      return {
+        patrimony: item.patrimony,
+        description: desc,
+        state: item.state,
+        location: item.location,
+      };
+    });
+
+    if (startY > pageHeight - 40) {
+      doc.addPage();
+      drawPageAssets();
+      startY = 54;
+    }
+
+    doc.setFont('Helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.setTextColor(15, 44, 89);
+    doc.text(`Categoria: ${cat.toUpperCase()}`, margin, startY);
+
+    autoTable(doc, {
+      columns: tableColumns,
+      body: tableRows,
+      startY: startY + 3,
+      margin: { top: 54, bottom: 45, left: margin, right: margin },
+      styles: {
+        font: 'Helvetica',
+        fontSize: 9,
+        cellPadding: 3,
+        overflow: 'linebreak',
+        valign: 'middle',
+      },
+      headStyles: {
+        fillColor: [15, 44, 89],
+        textColor: 255,
+        fontStyle: 'bold',
+        fontSize: 9,
+        halign: 'center',
+      },
+      alternateRowStyles: {
+        fillColor: [248, 250, 252],
+      },
+      columnStyles: {
+        patrimony: { cellWidth: 30, fontStyle: 'bold', halign: 'center' },
+        description: { cellWidth: 'auto', halign: 'left' },
+        state: { cellWidth: 25, halign: 'center' },
+        location: { cellWidth: 40, halign: 'center' },
+      },
+      didDrawPage: () => {
+        drawPageAssets();
+      },
+    });
+
+    startY = (doc.lastAutoTable && doc.lastAutoTable.finalY) + 12 || startY + 20;
+  }
+
+  if (typeof doc.putTotalPages === 'function') {
+    doc.putTotalPages('{total}');
+  }
+
+  const lastY = (doc.lastAutoTable && doc.lastAutoTable.finalY) || 50;
 
   if (lastY + 45 > pageHeight - 15) {
     doc.addPage();
-    drawHeader();
-    renderSummary(doc, 48, totalItems, countComputers, countMonitors, config, pageWidth, margin);
+    drawPageAssets();
+    renderSummary(doc, 52, totalItems, countComputers, countMonitors, config, pageWidth, margin);
   } else {
     renderSummary(doc, lastY + 8, totalItems, countComputers, countMonitors, config, pageWidth, margin);
   }
@@ -140,17 +201,17 @@ export function generatePdfReport(items, config) {
 }
 
 function renderSummary(doc, startY, total, computers, monitors, config, pageWidth, margin) {
-  doc.setDrawColor(226, 232, 240);
-  doc.setFillColor(248, 250, 252);
-  doc.rect(margin, startY, pageWidth - margin * 2, 12, 'FD');
+  doc.setDrawColor(15, 44, 89);
+  doc.setFillColor(240, 246, 255);
+  doc.rect(margin, startY, pageWidth - margin * 2, 14, 'FD');
 
   doc.setFont('Helvetica', 'bold');
-  doc.setFontSize(9);
-  doc.setTextColor(30, 41, 59);
+  doc.setFontSize(9.5);
+  doc.setTextColor(15, 44, 89);
   doc.text(
-    `RESUMO: Total Geral: ${total}   |   Computadores: ${computers}   |   Monitores: ${monitors}   |   Outros: ${total - computers - monitors}`,
-    margin + 4,
-    startY + 7.5
+    `RESUMO GERAL: Total de Itens: ${total}   |   Computadores: ${computers}   |   Monitores: ${monitors}   |   Outros: ${total - computers - monitors}`,
+    margin + 6,
+    startY + 9
   );
 
   const signatureY = startY + 28;

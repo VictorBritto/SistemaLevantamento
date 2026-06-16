@@ -22,7 +22,7 @@ export default function Header({ onExportBackup, onImportBackup, onImportDoc, on
           <ShieldCheck size={24} color="white" />
         </div>
         <div className="logo-text">
-          <h1>InvKeep</h1>
+          <h1>FHO-Levantamento</h1>
           <span>Controle de Inventário e Patrimônio</span>
         </div>
       </div>

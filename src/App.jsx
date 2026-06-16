@@ -101,9 +101,14 @@ export default function App() {
     setPdfModalOpen(true);
   }, [items, showToast]);
 
-  const handlePdfGenerate = useCallback((config) => {
-    generatePdfReport(items, config);
-    showToast('PDF gerado com sucesso!', 'success');
+  const handlePdfGenerate = useCallback(async (config) => {
+    try {
+      await generatePdfReport(items, config);
+      showToast('PDF gerado com sucesso!', 'success');
+    } catch (err) {
+      console.error('Erro ao gerar PDF:', err);
+      showToast('Falha ao gerar o PDF: ' + err.message, 'error');
+    }
   }, [items, showToast]);
 
   // Excel
@@ -125,7 +130,7 @@ export default function App() {
     importItems(newItems);
   }, [importItems]);
 
-  const handleDocPdfDirect = useCallback((docItems) => {
+  const handleDocPdfDirect = useCallback(async (docItems) => {
     const config = {
       title: 'Relatório de Inventário - Documento Importado',
       department: 'Depósito',
@@ -133,8 +138,14 @@ export default function App() {
       supervisor: '',
       includeNotes: true,
     };
-    generatePdfReport(docItems, config);
-  }, []);
+    try {
+      await generatePdfReport(docItems, config);
+      showToast('PDF gerado com sucesso!', 'success');
+    } catch (err) {
+      console.error('Erro ao gerar PDF Direto:', err);
+      showToast('Falha ao gerar o PDF: ' + err.message, 'error');
+    }
+  }, [showToast]);
 
   return (
     <>
