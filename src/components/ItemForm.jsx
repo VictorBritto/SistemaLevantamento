@@ -80,7 +80,7 @@ export default function ItemForm({ onSubmit, editingItem, onCancelEdit, isDuplic
   const isEditing = !!editingItem;
 
   return (
-    <aside className="form-sidebar glass-panel">
+    <aside className={`form-sidebar glass-panel ${isEditing ? 'editing' : ''}`}>
       <div className="sidebar-header">
         <h2>{isEditing ? 'Editar Item' : 'Cadastrar Novo Item'}</h2>
         <p>{isEditing ? `Editando patrimônio ${editingItem.patrimony}` : 'Adicione as informações do patrimônio'}</p>

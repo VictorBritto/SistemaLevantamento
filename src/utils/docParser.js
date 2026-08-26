@@ -229,6 +229,12 @@ export function applyMapping(rows, mapping, hasHeader = true) {
     .map(row => {
       const patrimony = mapping.patrimony !== undefined ? String(row[mapping.patrimony] || '').trim().toUpperCase() : '';
       if (!patrimony) return null; // Sem patrimônio = linha inválida
+      
+      // Prevent header row from being inserted by checking if patrimony matches header keyword
+      const patLower = patrimony.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      if (FIELD_KEYWORDS.patrimony.some(kw => kw === patLower || patLower === kw.toUpperCase() || patLower.includes('patrimonio') || patLower === 'codigo')) {
+        return null;
+      }
 
       const rawDescription = mapping.description !== undefined ? String(row[mapping.description] || '').trim() : '';
       const rawCategory = mapping.category !== undefined ? String(row[mapping.category] || '').trim() : '';
@@ -255,11 +261,34 @@ function parseLineType(line) {
   const clean = line.trim();
   if (!clean) return { type: 'empty' };
 
+  // Evaluate pure math expressions without '=' (e.g. "21+20+8+5+4")
+  if (/^[\d+\-\s\*\/]+$/.test(clean) && /[\+\*\/]/.test(clean)) {
+    try {
+      const total = eval(clean);
+      if (!isNaN(total)) {
+        return {
+          type: 'qty_indicator',
+          expression: clean,
+          total: total
+        };
+      }
+    } catch (e) {}
+  }
+
   // Check if first word is numeric (patrimony number)
   const firstWord = clean.split(/\s+/)[0];
   const isPatrimonyNumber = /^\d+$/.test(firstWord) || /^[A-Za-z]+[-_]?\d+$/.test(firstWord);
 
   if (isPatrimonyNumber) {
+    // Treat 1 or 2 digit numbers without leading zeros as quantities if they appear alone
+    if (/^[1-9]\d{0,2}$/.test(clean)) {
+      return {
+        type: 'qty_indicator',
+        expression: clean,
+        total: parseInt(clean, 10)
+      };
+    }
+
     // Check if it has notes after a separator (e.g. "039930 - gabinete")
     const match = clean.match(/^([A-Za-z0-9-_]+)\s*[-–—:]\s*(.+)$/);
     if (match) {
@@ -268,13 +297,23 @@ function parseLineType(line) {
         patrimony: match[1].toUpperCase(),
         note: match[2].trim()
       };
-    } else {
+    }
+    
+    // Check if it's a space separated code + note (e.g. "039930 gabinete")
+    const spaceMatch = clean.match(/^([A-Za-z0-9-_]+)\s+(.+)$/);
+    if (spaceMatch && (/^\d+$/.test(spaceMatch[1]) || /^[A-Za-z]+[-_]?\d+$/.test(spaceMatch[1]))) {
       return {
         type: 'item',
-        patrimony: clean.toUpperCase(),
-        note: ''
+        patrimony: spaceMatch[1].toUpperCase(),
+        note: spaceMatch[2].trim()
       };
     }
+
+    return {
+      type: 'item',
+      patrimony: clean.toUpperCase(),
+      note: ''
+    };
   }
 
   // Check if it is a total line or header with calculation
@@ -298,6 +337,16 @@ function parseLineType(line) {
       if (/^total/i.test(beforeText)) {
         return {
           type: 'summary_total',
+          name: beforeText.replace(/^total\s*:?/i, '').trim(),
+          total: total
+        };
+      }
+
+      // Check if beforeText is just a math expression
+      if (/^[\d+\-\s]+$/.test(beforeText)) {
+        return {
+          type: 'qty_indicator',
+          expression: beforeText,
           total: total
         };
       }
@@ -367,27 +416,29 @@ function normalizeCategory(categoryName) {
 }
 
 export function autoParseSimple(rows) {
-  const isSingleColumn = rows.every(r => r.length <= 2);
+  if (!rows || rows.length === 0) return null;
 
-  if (!isSingleColumn) return null;
+  // Check if this is a real table (e.g. CSV with 2+ columns) vs a text file with stray spaces
+  const rowsWithMultipleCols = rows.filter(r => r.length > 1 && String(r[1]).trim() !== '').length;
+  const isActuallyTable = rowsWithMultipleCols > (rows.length * 0.4);
 
-  // Flatten rows to array of strings, filtering out completely empty rows
-  const lines = rows.map(r => String(r[0] || '').trim()).filter(Boolean);
+  if (isActuallyTable) {
+    const maxCols = Math.max(...rows.map(r => r.length));
+    if (maxCols > 2) return null; // Fallback to manual mapping for wide tables
 
-  // Fallback to simple flat list if it has multiple filled columns or only numeric lines
-  const hasMultipleColumns = rows.some(r => r[1] && String(r[1]).trim() !== '');
-  const hasTextLines = lines.some(line => {
-    const clean = line.trim();
-    const isNum = /^\d+$/.test(clean) || /^[A-Za-z]+[-_]?\d+$/.test(clean);
-    return !isNum;
-  });
-
-  if (hasMultipleColumns || !hasTextLines) {
+    // It's a 1-2 column table, process as flat list
     return rows
       .filter(r => r[0] && String(r[0]).trim())
       .map(r => {
         const val = String(r[0]).trim().toUpperCase();
         const desc = r[1] ? String(r[1]).trim() : '';
+        
+        // Prevent header
+        const valLower = val.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        if (FIELD_KEYWORDS.patrimony.some(kw => kw === valLower || valLower === 'patrimonio' || valLower === 'codigo')) {
+          return null;
+        }
+
         return {
           patrimony: val,
           category: detectCategory(desc || val),
@@ -396,73 +447,101 @@ export function autoParseSimple(rows) {
           location: 'Depósito',
           notes: '',
         };
-      });
+      })
+      .filter(Boolean);
   }
 
-  // Grouped stream parser with lookahead
+  // Flatten rows to array of strings. Since it's a stream, we join parts so we don't lose data.
+  const lines = rows.map(r => r.filter(Boolean).join(' ').trim()).filter(Boolean);
+
+  // Check if it has actual text lines, otherwise it might just be a column of numbers
+  const hasTextLines = lines.some(line => {
+    const clean = line.trim();
+    const isNum = /^\d+$/.test(clean) || /^[A-Za-z]+[-_]?\d+$/.test(clean);
+    return !isNum;
+  });
+
+  if (!hasTextLines) {
+    return lines.map(line => ({
+      patrimony: line.toUpperCase(),
+      category: 'Outros',
+      description: line,
+      state: 'Bom',
+      location: 'Depósito',
+      notes: ''
+    }));
+  }
+
   const parsedLines = lines.map(line => parseLineType(line)).filter(l => l.type !== 'empty');
   const items = [];
   let currentCategory = 'Outros';
+  let itemsInCategory = 0;
+  let expectedQty = 0; // to keep track if a header specified a quantity
+
+  const generateBulkItems = (qty, catName) => {
+    if (qty <= 0) return;
+    const cat = normalizeCategory(catName);
+    const isDescarte = /descarte|sucata|quebrado|ruim/i.test(catName);
+    const prefix = catName.substring(0, 4).toUpperCase().replace(/[^A-Z]/g, '') || 'ITEM';
+    const rand = Math.floor(Math.random() * 900) + 100;
+    
+    for (let j = 0; j < qty; j++) {
+      items.push({
+        patrimony: `S/P-${prefix}${rand}-${(j+1).toString().padStart(3, '0')}`,
+        category: cat,
+        description: catName,
+        state: isDescarte ? 'Sucata' : 'Bom',
+        location: 'Depósito',
+        notes: 'Gerado em lote'
+      });
+      itemsInCategory++;
+    }
+  };
 
   for (let i = 0; i < parsedLines.length; i++) {
     const current = parsedLines[i];
-
-    if (current.type === 'summary_total') {
-      continue; // Skip group sum totals
-    }
 
     if (current.type === 'item') {
       const category = normalizeCategory(currentCategory);
       items.push({
         patrimony: current.patrimony,
         category: category,
-        description: current.note ? `${currentCategory} (${current.note})` : `${currentCategory} nº ${current.patrimony}`,
-        state: 'Bom',
+        description: current.note || currentCategory,
+        state: /descarte|sucata/i.test(currentCategory) ? 'Sucata' : 'Bom',
         location: 'Depósito',
-        notes: current.note ? `Observação original: ${current.note}` : '',
+        notes: '',
       });
-      continue;
-    }
-
-    if (current.type === 'header_plain') {
+      itemsInCategory++;
+    } else if (current.type === 'header_plain') {
+      // If we had an expected qty for the previous category but didn't reach it
+      if (expectedQty > itemsInCategory) {
+        generateBulkItems(expectedQty - itemsInCategory, currentCategory);
+      }
+      currentCategory = current.text;
+      itemsInCategory = 0;
+      expectedQty = 0;
+    } else if (current.type === 'header_with_qty') {
+      if (expectedQty > itemsInCategory) {
+        generateBulkItems(expectedQty - itemsInCategory, currentCategory);
+      }
       currentCategory = current.name;
-      continue;
+      itemsInCategory = 0;
+      expectedQty = current.total;
+    } else if (current.type === 'summary_total') {
+      const targetName = current.name || currentCategory;
+      const diff = current.total - itemsInCategory;
+      if (diff > 0) generateBulkItems(diff, targetName);
+      expectedQty = 0; // resolved
+    } else if (current.type === 'qty_indicator') {
+      const diff = current.total - itemsInCategory;
+      if (diff > 0) generateBulkItems(diff, currentCategory);
+      expectedQty = 0; // resolved
     }
+  }
 
-    if (current.type === 'header_with_qty') {
-      // Lookahead to see if there are any item codes listed below this header
-      let hasItemsUnderneath = false;
-      for (let j = i + 1; j < parsedLines.length; j++) {
-        const next = parsedLines[j];
-        if (next.type === 'header_plain' || next.type === 'header_with_qty') {
-          break; // Stop at next header
-        }
-        if (next.type === 'item') {
-          hasItemsUnderneath = true;
-          break;
-        }
-      }
-
-      if (hasItemsUnderneath) {
-        currentCategory = current.name;
-      } else {
-        // Virtual batch item
-        const descName = current.name;
-        const matchedCategory = normalizeCategory(descName);
-        const patrimony = generateVirtualPatrimony(descName);
-        
-        items.push({
-          patrimony,
-          category: matchedCategory,
-          description: `${descName} (Lote de ${current.total} itens)`,
-          state: detectStateFromName(descName),
-          location: 'Depósito',
-          notes: current.expression ? `Detalhamento: ${current.expression} = ${current.total} itens.` : `Lote com ${current.total} itens.`,
-          isVirtual: true,
-          quantity: current.total
-        });
-      }
-    }
+  // Check end of file
+  if (expectedQty > itemsInCategory) {
+    generateBulkItems(expectedQty - itemsInCategory, currentCategory);
   }
 
   return items.length > 0 ? items : null;

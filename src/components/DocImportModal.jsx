@@ -75,8 +75,8 @@ export default function DocImportModal({ isOpen, onClose, onImport, onGeneratePd
       const result = await readFile(file);
       setRawData(result);
 
-      // Tenta parsing automático simples para documentos de 1-2 colunas
-      if (result.rows.length > 0 && result.rows[0].length <= 2) {
+      // Tenta parsing automático simples
+      if (result.rows.length > 0) {
         const simple = autoParseSimple(result.rows);
         if (simple && simple.length > 0) {
           setParsedItems(simple);

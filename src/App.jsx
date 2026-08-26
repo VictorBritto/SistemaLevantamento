@@ -1,10 +1,13 @@
 import { useState, useCallback } from 'react';
+import ThemeProvider from './components/ThemeProvider';
 import Header from './components/Header';
 import Dashboard from './components/Dashboard';
 import ItemForm from './components/ItemForm';
 import InventoryTable from './components/InventoryTable';
 import PdfModal from './components/PdfModal';
 import DocImportModal from './components/DocImportModal';
+import MergeSpreadsheetsModal from './components/MergeSpreadsheetsModal';
+import AuditModal from './components/AuditModal';
 import ToastContainer from './components/ToastContainer';
 import { useInventory } from './hooks/useInventory';
 import { useToast } from './hooks/useToast';
@@ -19,11 +22,13 @@ export default function App() {
     clearInventory,
   } = useInventory();
 
-  const { toasts, showToast } = useToast();
+  const { toasts, showToast, removeToast } = useToast();
 
   const [editingItem, setEditingItem] = useState(null);
   const [pdfModalOpen, setPdfModalOpen] = useState(false);
   const [docModalOpen, setDocModalOpen] = useState(false);
+  const [mergeModalOpen, setMergeModalOpen] = useState(false);
+  const [auditModalOpen, setAuditModalOpen] = useState(false);
 
   // Item Form Submit
   const handleFormSubmit = useCallback((item) => {
@@ -148,14 +153,16 @@ export default function App() {
   }, [showToast]);
 
   return (
-    <>
-      <ToastContainer toasts={toasts} />
+    <ThemeProvider>
+      <ToastContainer toasts={toasts} onRemove={removeToast} />
 
       <div className="app-container">
         <Header
           onExportBackup={handleExportBackup}
           onImportBackup={handleImportBackup}
           onImportDoc={() => setDocModalOpen(true)}
+          onMergeDocs={() => setMergeModalOpen(true)}
+          onAudit={() => setAuditModalOpen(true)}
           onClearAll={handleClearInventory}
         />
 
@@ -194,6 +201,20 @@ export default function App() {
         onGeneratePdfDirect={handleDocPdfDirect}
         showToast={showToast}
       />
-    </>
+
+      <MergeSpreadsheetsModal
+        isOpen={mergeModalOpen}
+        onClose={() => setMergeModalOpen(false)}
+        onImport={handleDocImport}
+        showToast={showToast}
+      />
+
+      <AuditModal
+        isOpen={auditModalOpen}
+        onClose={() => setAuditModalOpen(false)}
+        items={items}
+        onEdit={handleEdit}
+      />
+    </ThemeProvider>
   );
 }

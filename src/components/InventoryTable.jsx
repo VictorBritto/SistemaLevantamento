@@ -61,6 +61,10 @@ export default function InventoryTable({ items, onEdit, onDelete, onLoadDemo, on
             <option value="Ruim">Ruim (Manutenção)</option>
           </select>
 
+          <span className="results-counter">
+            <strong>{filtered.length}</strong> de {items.length} itens
+          </span>
+
           <div className="filter-actions-group">
             <button id="btn-generate-pdf" className="btn btn-pdf" title="Gerar PDF Relatório" onClick={onGeneratePdf}>
               <FileText size={18} />
